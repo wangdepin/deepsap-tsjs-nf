@@ -30,5 +30,23 @@ workflow {
 
     validateParameters()
 
+    // Warn BEFORE ~19 GB starts moving. Nextflow pulls a docker:// image on the HEAD NODE
+    // before submitting any task, and NXF_APPTAINER_CACHEDIR only decides where the finished
+    // .img lands -- `apptainer pull` still writes every intermediate layer blob to
+    // APPTAINER_CACHEDIR, which defaults to $HOME/.apptainer/cache. On a cluster with a home
+    // quota that combination dies partway through with "disk quota exceeded" naming a path
+    // the user never configured. Observed on Puhti with NXF_APPTAINER_CACHEDIR set correctly.
+    if (params.deepsap_sif?.toString()?.startsWith('docker://') && !System.getenv('APPTAINER_CACHEDIR')
+            && !System.getenv('SINGULARITY_CACHEDIR')) {
+        log.warn """
+        |A docker:// image will be pulled (~19.3 GB of layers) and APPTAINER_CACHEDIR is unset,
+        |so apptainer will cache layer blobs under \$HOME/.apptainer/cache. If \$HOME is
+        |quota-limited the pull fails partway through with "disk quota exceeded". Set BOTH:
+        |    export APPTAINER_CACHEDIR=/scratch/<proj>/apptainer_cache
+        |    export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache
+        |Or pass --deepsap_sif /path/to/local.sif to skip the pull entirely.
+        """.stripMargin()
+    }
+
     DEEPSAP_TSJS_WF()
 }

@@ -357,12 +357,29 @@ docker://nvcr.io/nvidia/clara/clara-parabricks-deepsap@sha256:d437752a03761b8c73
 ```
 
 Anonymous pull is confirmed working — no NGC login, no API key. It is ~19.3 GB across 83
-layers and converts to a ~12 GB SIF, so set a persistent shared cache first, or the whole
-thing is re-fetched into the work directory every run:
+layers and converts to a ~12 GB SIF.
+
+**Set BOTH of these before the first run.** One is not enough, and getting it wrong fails
+after several GB have already been transferred:
 
 ```bash
-export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache   # NEVER $HOME — quota
+export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache   # where Nextflow keeps the final .img
+export APPTAINER_CACHEDIR=/scratch/<proj>/apptainer_cache # where apptainer keeps LAYER BLOBS
 ```
+
+They are different caches owned by different tools. `NXF_APPTAINER_CACHEDIR` only decides
+where the finished `.img` lands; `apptainer pull` still writes every intermediate layer blob
+to `$APPTAINER_CACHEDIR`, which **defaults to `$HOME/.apptainer/cache`**. On a cluster with a
+home quota that is exactly where it dies:
+
+```
+FATAL: While making image from oci registry: ... writing blob:
+       write /users/<me>/.apptainer/cache/blob/oci-put-blob...: disk quota exceeded
+```
+
+Observed here on Puhti (10 GB home quota) with `NXF_APPTAINER_CACHEDIR` correctly set — the
+final image location was right and the blobs still went to `$HOME`. `main.nf` now warns at
+startup when a `docker://` image is requested and `APPTAINER_CACHEDIR` is unset.
 
 **Pinned by digest, not `:latest`, on purpose.** Everything this pipeline asserts about
 DeepSAP — the wrapper's injected flags, the `/tmp/83` checkpoint and its exact byte count, the
@@ -370,11 +387,21 @@ extensionless output name, the `js`/`jt`/`nj` tags — was measured against *thi
 floating tag would let NVIDIA change any of that silently under a pipeline that would keep
 exiting 0. (At the time of pinning, this digest *was* `:latest`.)
 
+### Where the pull actually happens
+
+**On the head node, before any task is submitted** — not on a compute node. Verified from the
+Nextflow log: `nextflow.container.SingularityCache - Pulling Apptainer image docker://...`
+appears with a `Submitted process` count of zero.
+
+(An earlier version of this section claimed the opposite. It was wrong, and the practical
+consequences are the reverse of what it implied: compute nodes needing internet access is
+*not* a concern, but the head node's environment and its `$HOME` quota very much are.)
+
 ### When to pre-pull instead
 
-The auto-pull happens in the task that first needs the image — i.e. **on a compute node**. On
-clusters whose compute nodes have no route to the internet, that fails after the job has
-already queued. Pull once on the login node and point at the file:
+Pre-pulling is still worth it when you run the pipeline repeatedly, want the ~19 GB transfer
+off the login node, or are on a site that restricts outbound traffic from the head node. Pull
+once and point at the file:
 
 ```bash
 apptainer pull /scratch/<proj>/deepsap.sif \
