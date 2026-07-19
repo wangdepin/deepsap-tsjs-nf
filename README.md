@@ -168,6 +168,35 @@ this config. Fixed by deleting the block (the note in its place explains why it 
 deleted). Treat the local-validation list as unverified provenance; the cluster results below
 are the ones that were observed here.
 
+### From-scratch validation, 2026-07-19 — PASSED
+
+The strongest check run so far: every input fresh, so nothing in a working directory could be
+propping up the result. Fresh `git clone` from GitHub, fresh `NXF_HOME` (nf-schema downloaded,
+not reused), fresh image pulled from `docker://`, **fresh `--ctmp`**, `-profile slurm` (not
+`puhti`, so the generic site config and the real pull were both exercised).
+
+```
+DEEPSAP_TSJS_WF:PREPARE_REFERENCE   COMPLETED  649ms
+DEEPSAP_TSJS_WF:STAGE_CTMP          COMPLETED  3s
+DEEPSAP_TSJS_WF:DEEPSAP_TSJS gsnap  COMPLETED  21.7s
+DEEPSAP_TSJS_WF:DEEPSAP_TSJS star   COMPLETED  25s
+
+junctions.tsv  expected 2c4640e1…  got 2c4640e1…   ✔
+probs.npy      expected a82c0fb6…  got a82c0fb6…   ✔
+star junctions: 1807 (expect 1807)                 ✔
+RESULT: FROM-SCRATCH RUN PASSED
+```
+
+Two things this closed that no previous run could:
+
+- **`STAGE_CTMP`'s extraction branch finally executed.** Every prior run — in this pipeline
+  and the sibling project — found `ctmp` already populated and took the "reusing" path. Here
+  it logged `no staged checkpoint … staging from the image` followed by `staged and
+  byte-verified: 442457676 bytes`. The 442 MB extraction, and the `--no-mount tmp` it depends
+  on, are no longer inferred from the sibling project.
+- **The control reproduced byte-for-byte after a completely fresh install**, including a
+  freshly pulled image. The scored output does not depend on any local state.
+
 ### Cluster validation, 2026-07-19 (observed)
 
 - `-stub-run` on Puhti after the config fix: full DAG green, `publishDir` layout correct.
@@ -359,27 +388,54 @@ docker://nvcr.io/nvidia/clara/clara-parabricks-deepsap@sha256:d437752a03761b8c73
 Anonymous pull is confirmed working — no NGC login, no API key. It is ~19.3 GB across 83
 layers and converts to a ~12 GB SIF.
 
-**Set BOTH of these before the first run.** One is not enough, and getting it wrong fails
-after several GB have already been transferred:
+**Set all three of these before the first run.** Each one was learned by a separate failed
+attempt, each failing only after several GB had already moved:
 
 ```bash
-export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache   # where Nextflow keeps the final .img
-export APPTAINER_CACHEDIR=/scratch/<proj>/apptainer_cache # where apptainer keeps LAYER BLOBS
+export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache      # final .img (shared FS, 1 file)
+export APPTAINER_CACHEDIR=/local_scratch/$USER/cache        # layer blobs   -> LOCAL disk
+export APPTAINER_TMPDIR=/local_scratch/$USER/tmp            # rootfs unpack -> LOCAL disk
 ```
 
-They are different caches owned by different tools. `NXF_APPTAINER_CACHEDIR` only decides
-where the finished `.img` lands; `apptainer pull` still writes every intermediate layer blob
-to `$APPTAINER_CACHEDIR`, which **defaults to `$HOME/.apptainer/cache`**. On a cluster with a
-home quota that is exactly where it dies:
+Verified working on Puhti: 21m44s to pull and convert, producing a 12,001,042,432-byte SIF,
+with ~52 GB transiting local disk.
 
-```
-FATAL: While making image from oci registry: ... writing blob:
-       write /users/<me>/.apptainer/cache/blob/oci-put-blob...: disk quota exceeded
-```
+Why all three, and why two of them must be on **node-local** disk:
 
-Observed here on Puhti (10 GB home quota) with `NXF_APPTAINER_CACHEDIR` correctly set — the
-final image location was right and the blobs still went to `$HOME`. `main.nf` now warns at
-startup when a `docker://` image is requested and `APPTAINER_CACHEDIR` is unset.
+1. **`NXF_APPTAINER_CACHEDIR` is not enough.** It only decides where the finished `.img`
+   lands. `apptainer pull` writes every intermediate layer blob to `$APPTAINER_CACHEDIR`,
+   which **defaults to `$HOME/.apptainer/cache`**. With `NXF_APPTAINER_CACHEDIR` set correctly
+   the pull still died against Puhti's 10 GB home quota:
+
+   ```
+   FATAL: ... writing blob: write
+          /users/<me>/.apptainer/cache/blob/oci-put-blob...: disk quota exceeded
+   ```
+
+2. **Moving them to Lustre scratch fails too — with the same message and a different cause.**
+
+   ```
+   FATAL: ... unpack entry: usr/local/lib/python3.12/.../spin.cpython-312.pyc:
+          ... /scratch/.../apptainer_tmp/build-temp-.../rootfs/...: disk quota exceeded
+   ```
+
+   Scratch had **16 TB free**. The binding limit is Lustre's *inode* quota: this project sits
+   at 830,012 of 1,000,000 files, and unpacking a CUDA + Python rootfs — every `.pyc` in
+   `dist-packages` is its own file — needs more than that headroom. `/local_scratch` is 1 TB
+   of node-local disk with no inode quota. Only the finished `.img` goes back to shared
+   storage, costing one inode.
+
+> Nextflow's own hint on this failure is `Try and increase apptainer.pullTimeout`. **Ignore
+> it.** The failed attempt ran 11 minutes against a 3 h limit; the timeout is never the cause
+> of either of the above.
+
+`main.nf` warns at startup when a `docker://` image is requested and `APPTAINER_CACHEDIR` is
+unset, so case 1 costs a second rather than several GB.
+
+**Honest summary for Puhti:** the `docker://` default is *not* zero-configuration here. It
+works, and it is verified, but only with the three exports above. If you would rather not
+think about it, pre-pull once and pass `--deepsap_sif` — `-profile puhti` already does exactly
+that. Expect the inode limit to bite on other shared filesystems too.
 
 **Pinned by digest, not `:latest`, on purpose.** Everything this pipeline asserts about
 DeepSAP — the wrapper's injected flags, the `/tmp/83` checkpoint and its exact byte count, the
