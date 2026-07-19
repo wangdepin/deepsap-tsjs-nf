@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/deepsap-tsjs-nf/master/assets/schema_input.json",
+  "title": "deepsap-tsjs-nf samplesheet schema",
+  "description": "Documents the 'sample,bam' samplesheet format. Provided for reference and for future use with nf-schema's samplesheetToList(); the pipeline currently validates the samplesheet itself via splitCsv in workflows/deepsap_tsjs.nf -- see README 'What I could not verify' for why.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "sample": {
+        "type": "string",
+        "pattern": "^\\S+$",
+        "meta": ["id"],
+        "description": "Sample identifier. Used as meta.id and as the DeepSAP --prefix for this sample's outputs."
+      },
+      "bam": {
+        "type": "string",
+        "format": "file-path",
+        "exists": true,
+        "pattern": "^\\S+\\.(bam|sam)$",
+        "description": "Path to an existing BAM or SAM file to score. DeepSAP's -s/--sam flag is documented as accepting 'the SAM/BAM file' -- CRAM input is not confirmed and is not accepted here."
+      }
+    },
+    "required": ["sample", "bam"]
+  }
+}
