@@ -69,7 +69,7 @@
       "properties": {
         "deepsap_sif": {
           "type": "string",
-          "description": "Path to the local DeepSAP SIF (or an equivalent container reference). No cross-cluster default; set explicitly or via a cluster profile (e.g. conf/puhti.config).",
+          "description": "DeepSAP container: a docker:// URI (pulled and cached automatically) or a path to a local .sif. Defaults to the NGC image pinned by digest, which needs no login. Point at a local .sif to skip the ~12 GB pull.",
           "fa_icon": "fas fa-cube"
         },
         "ctmp": {
@@ -79,7 +79,6 @@
         }
       },
       "required": [
-        "deepsap_sif",
         "ctmp"
       ]
     },

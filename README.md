@@ -347,6 +347,47 @@ Published under `${outdir}/deepsap/<sample>/`:
 Scored-BAM tags added by TSJS: `js` (junction score 0–100), `jt` (junction type), `nj`
 (junction count).
 
+## Getting the image
+
+**You do not have to download anything by hand.** `params.deepsap_sif` defaults to the NGC
+image pinned by digest, and apptainer pulls and converts it on first use:
+
+```
+docker://nvcr.io/nvidia/clara/clara-parabricks-deepsap@sha256:d437752a03761b8c73aab1962e1aed877c58f99844f7b4856b676a2257becebf
+```
+
+Anonymous pull is confirmed working — no NGC login, no API key. It is ~19.3 GB across 83
+layers and converts to a ~12 GB SIF, so set a persistent shared cache first, or the whole
+thing is re-fetched into the work directory every run:
+
+```bash
+export NXF_APPTAINER_CACHEDIR=/scratch/<proj>/sifcache   # NEVER $HOME — quota
+```
+
+**Pinned by digest, not `:latest`, on purpose.** Everything this pipeline asserts about
+DeepSAP — the wrapper's injected flags, the `/tmp/83` checkpoint and its exact byte count, the
+extensionless output name, the `js`/`jt`/`nj` tags — was measured against *this* image. A
+floating tag would let NVIDIA change any of that silently under a pipeline that would keep
+exiting 0. (At the time of pinning, this digest *was* `:latest`.)
+
+### When to pre-pull instead
+
+The auto-pull happens in the task that first needs the image — i.e. **on a compute node**. On
+clusters whose compute nodes have no route to the internet, that fails after the job has
+already queued. Pull once on the login node and point at the file:
+
+```bash
+apptainer pull /scratch/<proj>/deepsap.sif \
+  docker://nvcr.io/nvidia/clara/clara-parabricks-deepsap@sha256:d437752a03761b8c73aab1962e1aed877c58f99844f7b4856b676a2257becebf
+
+nextflow run ... --deepsap_sif /scratch/<proj>/deepsap.sif
+```
+
+`-profile puhti` already does this — it overrides `deepsap_sif` with a local SIF, so it never
+pulls. Note `apptainer.pullTimeout` is raised to `3h` here: Nextflow's 20-minute default is
+not reliably enough for 19 GB, and when it is not, the failure is a mid-transfer timeout that
+does not name the real cause.
+
 ## Running elsewhere (Singularity, other clusters)
 
 Profiles are composable: pick one **engine** and one **executor/site**.
