@@ -6,7 +6,7 @@ transformer only. **No GSNAP alignment is ever invoked** — every task runs Dee
 
 **Status: run end-to-end on real compute.** On 2026-07-19 the pipeline scored two BAMs on a
 CSC Puhti V100 via SLURM (4 tasks, 4m01s wall). Design facts come from the sibling project
-[`private_projects/deepsap-cluster-feasibility`](../deepsap-cluster-feasibility/), whose
+`deepsap-cluster-feasibility` (a private sibling project, not published here), whose
 `scripts/common.sh` and `scripts/04_end_to_end.sbatch` are the origin of the `/tmp`-staging
 mechanics, container flags, and output-naming facts this pipeline relies on.
 
