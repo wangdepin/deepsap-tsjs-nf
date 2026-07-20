@@ -593,30 +593,52 @@ Practical consequences:
 - Keep the input BAM. The rewrite is not reversible from the output alone.
 - Coordinate sort order is preserved in the header (`SO:coordinate`), but POS changes mean
   the records are **no longer guaranteed to be in coordinate order**. Re-sort before indexing.
-  (Not yet verified how far out of order they get.)
+  Measured on mouse M_H2 (15.7 M records): **3,204 positions out of order** — small but
+  nonzero, and enough to make a naive index wrong. The gentler mouse rewrite (0.6 % of spliced
+  reads un-spliced, vs 47 % on *P. falciparum*) reflects mouse being 91.6 % annotated, since
+  annotated junctions are kept at any score.
+
+## Running on a new cluster
+
+See **[RUNNING_ON_A_NEW_CLUSTER.md](RUNNING_ON_A_NEW_CLUSTER.md)** for the full start-to-finish
+runbook (prerequisites → container → ctmp → inputs → canary → outputs). The essentials are the
+generic `-profile slurm` invocation in "Running elsewhere" above, plus: pre-pull or configure
+the three cache vars for the image, give an empty `--ctmp` dir, and match FASTA contig names to
+the BAM headers.
 
 ## Recommended first run
 
-Before scoring a real batch, run one representative BAM and check whether the scores are
-calibrated for your species — this is the open risk, not the plumbing:
+Always run **one** representative BAM before a batch, on a short-queue GPU partition if there is
+one. Check the plumbing (it completed, the GPU header is right, the junction table is sane),
+then the calibration.
 
 ```bash
-nextflow run main.nf -profile puhti \
-    --input one_sample.csv --fasta GRCh38.primary_assembly.genome.fa \
-    --gtf gencode.v44.annotation.gtf --ctmp /scratch/<proj>/deepsap_ctmp \
-    --outdir results_pilot
+nextflow run main.nf -profile slurm \
+    --gpu_partition <short_gpu> --gpu_time '15.m' \
+    --account <proj> --gpu_gres 'gpu:v100:1' \
+    --input one_sample.csv --fasta ref.fa --gtf ref.gtf \
+    --ctmp /scratch/<proj>/deepsap_ctmp --outdir results_pilot
 ```
 
-Then look at the annotated-junction score distribution:
+**The calibration quirk is understood, and it is not a species effect.** Annotated junctions
+that score low are explained by **window truncation on short introns** — DeepSAP cuts ±150 bp
+windows and scores ~0 when the intron is shorter than the window. Confirmed across mouse and
+*P. falciparum*: the fraction of annotated junctions scoring <50 equals the fraction with an
+intron <150 bp to within ~1 point (mouse 12–18 %, *P. falciparum* ~49 %), and ~100 % of low
+scorers have a truncated window. So a high low-score fraction does **not** mean the model is
+failing on your species — check it against intron length instead:
 
 ```bash
-awk -F'\t' 'NR>1 && $3!="Novel" {n++; if ($4<50) low++} \
-            END {printf "annotated: %d, below 50: %d (%.1f%%)\n", n, low, 100*low/n}' \
+awk -F'\t' 'NR>1 && $3!="Novel" {
+    n=split($1,p,"__"); ilen=p[n]-p[n-1]+1;
+    a++; if($4<50)lo++; if(ilen<150)sh++
+} END {printf "annotated %d | <50 %.1f%% | intron<150bp %.1f%%\n", a, 100*lo/a, 100*sh/a}' \
     results_pilot/deepsap/*/*_junctions.tsv
 ```
 
-Junctions the GTF itself annotates are the closest thing to a ground-truth positive set. If a
-large fraction of them scores low on human — as happened on *P. falciparum* (48.2%) — the
-model is not discriminating on your data and the novel calls should not be trusted. If that
-fraction is small, the *P. falciparum* result was a species artefact and the scores are
-behaving. Either way you will know from one BAM instead of finding out after a batch.
+If the two percentages track, the low scores are the short-intron artifact and the tool is
+discriminating where the window is intact (spurious junctions with full windows — e.g. mouse
+chrM, which has no real introns — do score low). The consequence is asymmetric: annotated
+junctions are kept at any score, but **novel** junctions scoring <50 are rejected and un-spliced
+in the BAM, so genuine novel *short* introns are discarded (~97 % of short novel junctions in
+the mouse data). See RUNNING_ON_A_NEW_CLUSTER.md step 8 for the full picture.
